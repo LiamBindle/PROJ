@@ -152,6 +152,7 @@ set(SRC_LIBPROJ_PROJECTIONS
   projections/calcofi.cpp
   projections/eqearth.cpp
   projections/col_urban.cpp
+  projections/gcs.cpp
 )
 
 set(SRC_LIBPROJ_CONVERSIONS

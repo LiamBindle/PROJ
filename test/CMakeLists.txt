@@ -18,6 +18,7 @@ proj_add_gie_test("guyou" "gie/guyou.gie")
 proj_add_gie_test("peirce_q" "gie/peirce_q.gie")
 proj_add_gie_test("defmodel" "gie/defmodel.gie")
 proj_add_gie_test("tinshift" "gie/tinshift.gie")
+# Add GCS test here
 
 # GIGS tests. Uncommented tests are expected to fail due to issues with
 # various projections. Should be investigated further and fixed.

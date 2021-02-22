@@ -195,6 +195,7 @@ libproj_la_SOURCES = \
 	projections/calcofi.cpp \
 	projections/eqearth.cpp \
 	projections/col_urban.cpp \
+	projections/gcs.cpp \
 	\
 	conversions/axisswap.cpp \
 	conversions/cart.cpp \
