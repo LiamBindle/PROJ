@@ -11,7 +11,6 @@ PROJ_HEAD(gcs, "GnominicCubedSphere") "\n\tAzi, Sph";
 
 #define EPS10  1.e-10
 
-
 PJ_XY decode_tile_xy(char c, const char** error_msg);
 void get_tile_rotations(PJ_XY* tile_pos, int* ccw_rotations, const char** error_msg);
 
@@ -40,8 +39,11 @@ struct pj_opaque {
     int tile_rotation_mat[6][2][2];
     int selected_face;
     bool explicit_face;
+    int face_search_list[6];
     PJ_XY tile_false_origin[6];
-    PJ face_proj[6];
+    PJ_LP face_false_origin[6];
+    PJ* face_proj[6];
+    char face_proj_def[6][256];
 };
 } // anonymous namespace
 
@@ -150,7 +152,40 @@ void get_tile_rotations(PJ_XY* tile_pos, int* ccw_rotations, const char** error_
 static PJ_XY gcs_s_forward (PJ_LP lp, PJ *P) {           /* Spheroidal, forward */
     PJ_XY xy = {0.0,0.0};
     struct pj_opaque *Q = static_cast<struct pj_opaque*>(P->opaque);
-   
+    double temp;
+    int i, s;
+    PJ_LP lp_i;
+    for(s = 0; s < 6; ++s) {
+        i = Q->face_search_list[s];
+        lp_i = {lp.lam - Q->face_false_origin[i].lam, lp.phi};
+        xy = Q->face_proj[i]->fwd(lp_i, Q->face_proj[i]);
+        if (proj_errno_reset(Q->face_proj[i]) == 0 && xy.x >= -1 && xy.x <= 1 && xy.y >= -1 && xy.y <= 1) {
+            break;
+        }
+    }
+
+    while(s > 0) {
+        Q->face_search_list[s] = Q->face_search_list[s-1];
+        s--;
+    }
+    Q->face_search_list[0] = i;
+
+
+    if (xy.x > 1 || xy.x < -1 || xy.y > 1 || xy.y < -1) {
+        proj_errno_set(P, PROJ_ERR_COORD_TRANSFM_OUTSIDE_PROJECTION_DOMAIN);
+        xy = {HUGE_VAL, HUGE_VAL};
+        return xy;
+    }
+
+    /* apply CCW rotations */
+    temp = Q->tile_rotation_mat[i][0][0] * xy.x + Q->tile_rotation_mat[i][0][1] * xy.y;
+    xy.y = Q->tile_rotation_mat[i][1][0] * xy.x + Q->tile_rotation_mat[i][1][1] * xy.y;
+    xy.x = temp;
+
+    /* apply offset */
+    xy.x += Q->tile_false_origin[i].x;
+    xy.y += Q->tile_false_origin[i].y;
+
     return xy;
 }
 
@@ -158,21 +193,39 @@ static PJ_XY gcs_s_forward (PJ_LP lp, PJ *P) {           /* Spheroidal, forward 
 static PJ_LP gcs_s_inverse (PJ_XY xy, PJ *P) {           /* Spheroidal, inverse */
     PJ_LP lp = {0.0,0.0};
     struct pj_opaque *Q = static_cast<struct pj_opaque*>(P->opaque);
-    
+    double temp;
+    double temp_x, temp_y;
+    int i;
+
+    for(i = 0; i < 6; ++i) {
+        /* reverse offset */
+        temp_x = xy.x - Q->tile_false_origin[i].x;
+        temp_y = xy.y - Q->tile_false_origin[i].y;
+        if (temp_x >= -1 && temp_x <= 1 && temp_y >= -1 && temp_y <= 1) {
+            break;
+        }
+    }
+
+    if (temp_x > 1 || temp_x < -1 || temp_y > 1 || temp_y < -1) {
+        proj_errno_set(P, PROJ_ERR_COORD_TRANSFM_OUTSIDE_PROJECTION_DOMAIN);
+        lp = {HUGE_VAL, HUGE_VAL};
+        return lp;
+    }
+
+    /* reverse rotation */
+    temp   = Q->tile_rotation_mat[i][0][0] * temp_x + Q->tile_rotation_mat[i][1][0] * temp_y;
+    temp_y = Q->tile_rotation_mat[i][0][1] * temp_x + Q->tile_rotation_mat[i][1][1] * temp_y;
+    temp_x = temp;
+
+    lp = Q->face_proj[i]->inv({temp_x, temp_y}, Q->face_proj[i]);
+    lp.lam += Q->face_false_origin[i].lam;
     return lp;
 }
 
+// need destructor
 
 PJ *PROJECTION(gcs) {
     struct pj_opaque *Q = static_cast<struct pj_opaque*>(calloc (1, sizeof (struct pj_opaque)));
-    const PJ_LP face_false_origin[6] = {
-        {0., 0.},
-        {M_PI, 0.},
-        {M_HALFPI, 0.},
-        {-M_HALFPI, 0.},
-        {0., M_HALFPI},
-        {0., -M_HALFPI},
-    };
     PJ_XY px_tile_pos; // position of +x tile; other tile position are relative to +x
     int cube_index[6] = {0, 3, 1, 4, 2, 5}; // {+x, -x, +y, -y, +z, -z}, default value is GEOS-5 indexing
     const char* err_msg = nullptr;
@@ -255,6 +308,7 @@ PJ *PROJECTION(gcs) {
         }
     }
 
+    // get tile rotations
     int ccw_rotations[6];
     get_tile_rotations(Q->tile_false_origin, ccw_rotations, &err_msg);
     if (err_msg != nullptr) {
@@ -262,6 +316,7 @@ PJ *PROJECTION(gcs) {
         return pj_default_destructor(P, PROJ_ERR_INVALID_OP_ILLEGAL_ARG_VALUE);
     }
 
+    // tile rotation matrices
     for (int i = 0; i < 6; ++i) {
         switch (ccw_rotations[i]) {
             case 0:
@@ -291,35 +346,54 @@ PJ *PROJECTION(gcs) {
         }
     }
 
+    // projections for each face
+    Q->face_false_origin[0] = {0., 0.};
+    Q->face_false_origin[1] = {M_PI, 0.};
+    Q->face_false_origin[2] = {M_HALFPI, 0.};
+    Q->face_false_origin[3] = {-M_HALFPI, 0.};
+    Q->face_false_origin[4] = {0., M_HALFPI};
+    Q->face_false_origin[5] = {0., -M_HALFPI};
+    for (int i = 0; i < 6; ++i) {
+        sprintf(Q->face_proj_def[i], "+proj=gnom +lat_0=%f +lon_0=%f", Q->face_false_origin[i].phi*180./M_PI, Q->face_false_origin[i].lam*180./M_PI);
+        Q->face_proj[i] = proj_create(P->ctx, Q->face_proj_def[i]);
+        if (Q->face_proj[i] == nullptr) {
+            return pj_default_destructor(P, PROJ_ERR_INVALID_OP_ILLEGAL_ARG_VALUE);
+        }
+    }
+
+    for (int i = 0; i < 6; ++i) {
+        Q->face_search_list[i] = i;
+    }
+
     P->inv = gcs_s_inverse;
     P->fwd = gcs_s_forward;
     P->es = 0.;
 
-    printf("gcs projection\n");
-    printf("\t-- false origins x: %f, %f, %f, %f, %f, %f\n", 
-        Q->tile_false_origin[0].x,
-        Q->tile_false_origin[1].x,
-        Q->tile_false_origin[2].x,
-        Q->tile_false_origin[3].x,
-        Q->tile_false_origin[4].x,
-        Q->tile_false_origin[5].x
-    );
-    printf("\t-- false origins y: %f, %f, %f, %f, %f, %f\n", 
-        Q->tile_false_origin[0].y,
-        Q->tile_false_origin[1].y,
-        Q->tile_false_origin[2].y,
-        Q->tile_false_origin[3].y,
-        Q->tile_false_origin[4].y,
-        Q->tile_false_origin[5].y
-    );
-    printf("\t-- rotations: %i, %i, %i, %i, %i, %i\n", 
-        ccw_rotations[0],
-        ccw_rotations[1],
-        ccw_rotations[2],
-        ccw_rotations[3],
-        ccw_rotations[4],
-        ccw_rotations[5]
-    );
+    // printf("gcs projection\n");
+    // printf("\t-- false origins x: %f, %f, %f, %f, %f, %f\n", 
+    //     Q->tile_false_origin[0].x,
+    //     Q->tile_false_origin[1].x,
+    //     Q->tile_false_origin[2].x,
+    //     Q->tile_false_origin[3].x,
+    //     Q->tile_false_origin[4].x,
+    //     Q->tile_false_origin[5].x
+    // );
+    // printf("\t-- false origins y: %f, %f, %f, %f, %f, %f\n", 
+    //     Q->tile_false_origin[0].y,
+    //     Q->tile_false_origin[1].y,
+    //     Q->tile_false_origin[2].y,
+    //     Q->tile_false_origin[3].y,
+    //     Q->tile_false_origin[4].y,
+    //     Q->tile_false_origin[5].y
+    // );
+    // printf("\t-- rotations: %i, %i, %i, %i, %i, %i\n", 
+    //     ccw_rotations[0],
+    //     ccw_rotations[1],
+    //     ccw_rotations[2],
+    //     ccw_rotations[3],
+    //     ccw_rotations[4],
+    //     ccw_rotations[5]
+    // );
 
     return P;
 }
