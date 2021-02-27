@@ -1,5 +1,104 @@
 
+Test cases for gcs arguments
+
+    +cube_index: must be 6 characters between '0' and '6'
+        - too few/many characters
+        - above/below range
+        - bad characters
+
+    +cube_face: integer, must exist in +cube_index
+        - missing (0 if 1-based, 6 if 0-based)
+        - out of range (below 0, above 6)
+        - bad character
+    
+    +cube_net: 6 vigesimal characters (skip I)
+        - below range (/)
+        - below range (L)
+        - letter I 
+        - too few/too many characters
+        - no adjacent
+
+
+
+
 <gie>
+--------------------------------------------
+Test errors
+--------------------------------------------
+echo ---------------------------- Testing error handling ----------------------------
+
+echo cube_index:: testing too few indices...
+operation +proj=gcs +cube_index=12345
+expect failure invalid_op_illegal_arg_value
+
+echo cube_index:: testing too many indices...
+operation +proj=gcs +cube_index=1234566
+expect failure invalid_op_illegal_arg_value
+
+echo cube_index:: testing out-of-range (1/3)...
+operation +proj=gcs +cube_index=123457
+expect failure invalid_op_illegal_arg_value
+
+echo cube_index:: testing out-of-range (2/3)...
+operation +proj=gcs +cube_index=12345a
+expect failure invalid_op_illegal_arg_value
+
+echo cube_index:: testing out-of-range (3/3)...
+operation +proj=gcs +cube_index=/23456
+expect failure invalid_op_illegal_arg_value
+
+echo cube_index:: testing duplicate indices...
+operation +proj=gcs +cube_index=113456
+expect failure invalid_op_illegal_arg_value
+
+
+echo cube_face:: testing missing index (1/2)...
+operation +proj=gcs +cube_index=123456 +cube_face=0
+expect failure invalid_op_illegal_arg_value
+
+echo cube_face:: testing missing index (2/2)...
+operation +proj=gcs +cube_index=012345 +cube_face=6
+expect failure invalid_op_illegal_arg_value
+
+echo cube_face:: testing bad index (1/3)...
+operation +proj=gcs +cube_index=123456 +cube_face=-1
+expect failure invalid_op_illegal_arg_value
+
+echo cube_face:: testing bad index (2/3)...
+operation +proj=gcs +cube_index=123456 +cube_face=7
+expect failure invalid_op_illegal_arg_value
+
+echo cube_face:: testing bad index (3/3)...
+operation +proj=gcs +cube_index=123456 +cube_face=a
+expect failure invalid_op_illegal_arg_value
+
+
+echo cube_net:: out-of-range (1/3)...
+operation +proj=gcs +cube_net=5/6419
+expect failure invalid_op_illegal_arg_value
+
+echo cube_net:: out-of-range (2/3)...
+operation +proj=gcs +cube_net=5L6419
+expect failure invalid_op_illegal_arg_value
+
+echo cube_net:: out-of-range (3/3)...
+operation +proj=gcs +cube_net=5I6419
+expect failure invalid_op_illegal_arg_value
+
+echo cube_net:: too few characters...
+operation +proj=gcs +cube_net=59641
+expect failure invalid_op_illegal_arg_value
+
+echo cube_net:: too many characters...
+operation +proj=gcs +cube_net=59641AB
+expect failure invalid_op_illegal_arg_value
+
+echo cube_net:: no adjacent tile...
+operation +proj=gcs +cube_net=476419
+expect failure invalid_op_illegal_arg_value
+
+echo -------------------------- Done testing error handling --------------------------
+
 --------------------------------------------
 Test +X face
 --------------------------------------------
@@ -382,6 +481,16 @@ Face -Z
 --------------------------------------------
 accept 210.00 -60.00
 expect 36427612.44 22323479.5 
+
+--------------------------------------------
+Selected face tests
+--------------------------------------------
+operation  +proj=gcs +cube_index031425 +cube_face=5
+tolerance 10 cm
+accept 210.00 -60.00
+expect 36427612.44 22323479.5 
+accept 0 -44.0
+expect failure coord_transfm_outside_projection_domain
 
 --------------------------------------------
 Round trip tests

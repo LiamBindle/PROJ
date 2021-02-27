@@ -13,9 +13,12 @@ PROJ_HEAD(gcs, "GnominicCubedSphere") "\n\tAzi, Sph";
 
 PJ_XY decode_tile_xy(char c, const char** error_msg);
 void pcns1_tile_rotations(PJ_XY* tile_pos, int* ccw_rotations, const char** error_msg);
+PJ *gcs_destructor(PJ *P, int errlev);
 
 namespace { // anonymous namespace
-constexpr double bn_trans_mat_xyz_to_uv[6][2][3] = { // xyz->uv transformation matrix for the base net (bn); a base net is one that requires no rotations
+
+// xyz->uv transformation matrix for the base net (bn); a base net is one that requires no rotations
+constexpr double bn_trans_mat_xyz_to_uv[6][2][3] = { 
     {{0, 1, 0},  {0, 0, 1}},  // +X
     {{0, -1, 0}, {0, 0, 1}},  // -X
     {{-1, 0, 0}, {0, 0, 1}},  // +Y
@@ -73,6 +76,7 @@ PJ_XY decode_tile_xy(char c, const char** error_msg) {
         v += 18;
     } else {
         *error_msg = "Invalid character in +cube_net (valid characters are 0-9,A-H,J-K case-insensitive)";
+        return xy;
     }
 
     // XY offset
@@ -93,6 +97,7 @@ PJ_XY decode_tile_xy(char c, const char** error_msg) {
         xy.y = -1.;
     } else {
         *error_msg = "Internal error decoding tile offset";
+        return xy;
     }
 
     // multiply by 2
@@ -102,7 +107,7 @@ PJ_XY decode_tile_xy(char c, const char** error_msg) {
 }
 
 void pcns1_tile_rotations(PJ_XY* tile_pos, int* ccw_rotations, const char** error_msg) {
-    error_msg = nullptr;
+    *error_msg = nullptr;
     // calculate rotations for each face
     for (int i = 0; i < 6; ++i) {
         int j;
@@ -140,7 +145,6 @@ void pcns1_tile_rotations(PJ_XY* tile_pos, int* ccw_rotations, const char** erro
 
         ccw_rotations[i] = 0;
         l1norm = fabs(base_edge.u - target_edge.u) + fabs(base_edge.v - target_edge.v);
-
         while(l1norm > EPS10) { /* native edge is not equal to target edge */
             /* rotate 90 deg CCW */
             temp = -base_edge.v;
@@ -166,7 +170,9 @@ static PJ_XY gcs_s_forward (PJ_LP lp, PJ *P) {           /* Spheroidal, forward 
     enum Face i;
     PJ_LP lp_i;
 
-    for(int s = 0; s < 6; ++s) {
+    int s_end = Q->selected_face ? 1 : 6;  // if a face is selected it is first in MRU list, t.f., stop search for s>=1
+
+    for(int s = 0; s < s_end; ++s) {
         i = static_cast<enum Face>(Q->mru_face[s]);
         lp_i = {lp.lam - Q->face_false_origin[i].lam, lp.phi};
         xy = Q->face_proj[i]->fwd(lp_i, Q->face_proj[i]);
@@ -232,17 +238,36 @@ static PJ_LP gcs_s_inverse (PJ_XY xy, PJ *P) {           /* Spheroidal, inverse 
     return lp;
 }
 
-// need destructor
+PJ *gcs_destructor(PJ *P, int errlev) {
+    if (P == nullptr)
+        return nullptr;
+
+    if (P->opaque == nullptr)
+        return pj_default_destructor (P, errlev);
+
+    struct pj_opaque *Q = static_cast<struct pj_opaque*>(P->opaque);
+    for(int i = X_P; i <= Z_N; ++i) {
+        if (Q->face_proj[i] != nullptr) {
+            Q->face_proj[i]->destructor(Q->face_proj[i], errlev);
+        }
+    }
+
+    return pj_default_destructor(P, errlev);
+}
 
 PJ *PROJECTION(gcs) {
     struct pj_opaque *Q = static_cast<struct pj_opaque*>(calloc (1, sizeof (struct pj_opaque)));
-    enum Face cube_index[7] = {X_P, Y_P, Z_P, X_N, Y_N, Z_N, NOT_A_FACE}; // mapping user index -> actual index
+    enum Face cube_index[7] = {NOT_A_FACE, NOT_A_FACE, NOT_A_FACE, NOT_A_FACE, NOT_A_FACE, NOT_A_FACE, NOT_A_FACE}; // mapping user index -> actual index
     char cube_net[6] = {'8', '6', '9', '2', '5', '3'};                    // cube net definition
     const char* err_msg = nullptr;
     if (nullptr==Q) {
         return pj_default_destructor (P, PROJ_ERR_OTHER /*ENOMEM*/);
     }
     P->opaque = Q;
+
+    for (int i = 0; i < 6; ++i) {
+        Q->face_proj[i] = nullptr; // initialize to null so destructor knows whether to deallocate
+    }
 
     // Get the user's face indices
     if (pj_param(P->ctx, P->params, "tcube_index").i) {
@@ -251,14 +276,14 @@ PJ *PROJECTION(gcs) {
 
         if (strlen(arg_cube_index) != 6) {
             proj_log_error(P, _("+cube_index must be exactly 6 characters"));
-            return pj_default_destructor(P, PROJ_ERR_INVALID_OP_ILLEGAL_ARG_VALUE);
+            return gcs_destructor(P, PROJ_ERR_INVALID_OP_ILLEGAL_ARG_VALUE);
         }
 
         for(int i = X_P; i <= Z_N; ++i) {
             temp = static_cast<int>(arg_cube_index[i] - '0');
             if (temp < 0 || temp > 6) {
                 proj_log_error(P, _("Invalid index in +cube_index. Indices must be 0-6."));
-                return pj_default_destructor(P, PROJ_ERR_INVALID_OP_ILLEGAL_ARG_VALUE);
+                return gcs_destructor(P, PROJ_ERR_INVALID_OP_ILLEGAL_ARG_VALUE);
             }
             cube_index[temp] = static_cast<enum Face>(i);
         }
@@ -272,8 +297,15 @@ PJ *PROJECTION(gcs) {
         }
         if (not_a_face_count != 1) {
             proj_log_error(P, _("Invalid indices in +cube_index. Indices must be unique."));
-            return pj_default_destructor(P, PROJ_ERR_INVALID_OP_ILLEGAL_ARG_VALUE);
+            return gcs_destructor(P, PROJ_ERR_INVALID_OP_ILLEGAL_ARG_VALUE);
         }
+    } else {
+        cube_index[0] = X_P;
+        cube_index[1] = Y_P;
+        cube_index[2] = Z_P;
+        cube_index[3] = X_N;
+        cube_index[4] = Y_N;
+        cube_index[5] = Z_N;
     }
 
     // Set specific face if the user specified +cube_face
@@ -282,7 +314,7 @@ PJ *PROJECTION(gcs) {
         int temp = pj_param(P->ctx, P->params, "icube_face").i;
         if(temp < 0 || temp >= 7 || cube_index[temp] == NOT_A_FACE) {
             proj_log_error(P, _("Invalid +cube_face (index doesn't occur in +cube_index)."));
-            return pj_default_destructor(P, PROJ_ERR_INVALID_OP_ILLEGAL_ARG_VALUE);
+            return gcs_destructor(P, PROJ_ERR_INVALID_OP_ILLEGAL_ARG_VALUE);
         }
         Q->selected_face =  cube_index[temp];
     }
@@ -293,7 +325,7 @@ PJ *PROJECTION(gcs) {
 
         if (strlen(temp_cc) != 6) {
             proj_log_error(P, _("+cube_net must be exactly 6 characters"));
-            return pj_default_destructor(P, PROJ_ERR_INVALID_OP_ILLEGAL_ARG_VALUE);
+            return gcs_destructor(P, PROJ_ERR_INVALID_OP_ILLEGAL_ARG_VALUE);
         }
 
         for (int i = X_P; i <= Z_N; ++i) {
@@ -305,7 +337,7 @@ PJ *PROJECTION(gcs) {
         Q->tile_false_origin[i] = decode_tile_xy(cube_net[i], &err_msg);
         if (err_msg != nullptr) {
             proj_log_error(P, _(err_msg));
-            return pj_default_destructor(P, PROJ_ERR_INVALID_OP_ILLEGAL_ARG_VALUE);
+            return gcs_destructor(P, PROJ_ERR_INVALID_OP_ILLEGAL_ARG_VALUE);
         }
     }
     // Set the tiles' false origins to the center of +X
@@ -318,7 +350,7 @@ PJ *PROJECTION(gcs) {
     pcns1_tile_rotations(Q->tile_false_origin, ccw_rotations, &err_msg);
     if (err_msg != nullptr) {
         proj_log_error(P, _(err_msg));
-        return pj_default_destructor(P, PROJ_ERR_INVALID_OP_ILLEGAL_ARG_VALUE);
+        return gcs_destructor(P, PROJ_ERR_INVALID_OP_ILLEGAL_ARG_VALUE);
     }
     // Set tile rotations matrices
     for (int i = X_P; i <= Z_N; ++i) {
@@ -363,44 +395,19 @@ PJ *PROJECTION(gcs) {
         sprintf(Q->face_proj_def[i], "+proj=gnom +lat_0=%f +lon_0=%f", phi0, lam0);
         Q->face_proj[i] = proj_create(P->ctx, Q->face_proj_def[i]);
         if (Q->face_proj[i] == nullptr) {
-            return pj_default_destructor(P, PROJ_ERR_INVALID_OP_ILLEGAL_ARG_VALUE);
+            return gcs_destructor(P, PROJ_ERR_INVALID_OP_ILLEGAL_ARG_VALUE);
         }
     }
 
     // Initialize MRU list
     for (int i = X_P; i <= Z_N; ++i) {
-        Q->mru_face[i] = static_cast<enum Face>(i);
+        Q->mru_face[i] = Q->specific_face ? Q->selected_face : static_cast<enum Face>(i);
     }
 
     P->inv = gcs_s_inverse;
     P->fwd = gcs_s_forward;
     P->es = 0.;
-
-    printf("gcs projection\n");
-    printf("\t-- false origins x: %f, %f, %f, %f, %f, %f\n", 
-        Q->tile_false_origin[0].x,
-        Q->tile_false_origin[1].x,
-        Q->tile_false_origin[2].x,
-        Q->tile_false_origin[3].x,
-        Q->tile_false_origin[4].x,
-        Q->tile_false_origin[5].x
-    );
-    printf("\t-- false origins y: %f, %f, %f, %f, %f, %f\n", 
-        Q->tile_false_origin[0].y,
-        Q->tile_false_origin[1].y,
-        Q->tile_false_origin[2].y,
-        Q->tile_false_origin[3].y,
-        Q->tile_false_origin[4].y,
-        Q->tile_false_origin[5].y
-    );
-    printf("\t-- rotations: %i, %i, %i, %i, %i, %i\n", 
-        ccw_rotations[0],
-        ccw_rotations[1],
-        ccw_rotations[2],
-        ccw_rotations[3],
-        ccw_rotations[4],
-        ccw_rotations[5]
-    );
+    P->destructor = gcs_destructor;
 
     return P;
 }
