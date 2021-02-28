@@ -62,42 +62,27 @@ struct pj_opaque {
 
 PJ_XY decode_tile_xy(char c, const char** error_msg) {
     PJ_XY xy = {0.0,0.0};
-    int v = toupper(c);
+    int v = toupper(c) - 'A';
     *error_msg = nullptr;
 
-    // decode character 
-    if (v >= '0' && v <= '9') {
-        v -= '0';
-    } else if (v >= 'A' && v <= 'H') {
-        v -= 'A';
-        v += 10;
-    } else if (v >= 'J' && v <= 'K') {
-        v -= 'J';
-        v += 18;
-    } else {
-        *error_msg = "Invalid character in +cube_net (valid characters are 0-9,A-H,J-K case-insensitive)";
+    if (v < 0 || v > 18) {
+        *error_msg = "Invalid character in +cube_net (valid characters are A-S case-insensitive)";
         return xy;
     }
-
+    
     // XY offset
-    if (v >= 0 && v <= 15) {
-        xy.x = static_cast<double>(v % 4);
-        xy.y = -static_cast<double>(v / 4);
-    } else if (v == 16) {
-        xy.x = 0.;
-        xy.y = -4.;
-    } else if (v == 17) {
-        xy.x = 1.;
-        xy.y = -4.;
-    } else if (v == 18) {
-        xy.x = 4.;
-        xy.y = 0.;
-    } else if (v == 19) {
-        xy.x = 4.;
-        xy.y = -1.;
+    if (v < 10) {
+        xy.x = static_cast<double>(v % 5);
+        xy.y = -static_cast<double>(v / 5);
+    } else if (v < 14) {
+        xy.x = static_cast<double>(v - 10);
+        xy.y = -2;
+    } else if (v < 17) {
+        xy.x = static_cast<double>(v - 14);
+        xy.y = -3;
     } else {
-        *error_msg = "Internal error decoding tile offset";
-        return xy;
+        xy.x = static_cast<double>(v - 17);
+        xy.y = -4;
     }
 
     // multiply by 2
@@ -258,7 +243,7 @@ PJ *gcs_destructor(PJ *P, int errlev) {
 PJ *PROJECTION(gcs) {
     struct pj_opaque *Q = static_cast<struct pj_opaque*>(calloc (1, sizeof (struct pj_opaque)));
     enum Face cube_index[7] = {NOT_A_FACE, NOT_A_FACE, NOT_A_FACE, NOT_A_FACE, NOT_A_FACE, NOT_A_FACE, NOT_A_FACE}; // mapping user index -> actual index
-    char cube_net[6] = {'8', '6', '9', '2', '5', '3'};                    // cube net definition
+    char cube_net[6] = {'K', 'H', 'L', 'C', 'G', 'D'};                    // cube net definition
     const char* err_msg = nullptr;
     if (nullptr==Q) {
         return pj_default_destructor (P, PROJ_ERR_OTHER /*ENOMEM*/);
