@@ -149,16 +149,6 @@ static const ParamMapping paramLongSecondPoint = {
     "Longitude of 2nd point", 0, "Longitude_Of_2nd_Point",
     common::UnitOfMeasure::Type::ANGULAR, lon_2};
 
-static const ParamMapping paramGCSFace = {
-    "Gnominic cubed sphere face", 0, "Gnominic_cubed_sphere_face", 
-    common::UnitOfMeasure::Type::NONE, "cube_face"};
-static const ParamMapping paramGCSNet = {
-    "Cube net coding", 0, "Cube_net_coding", 
-    common::UnitOfMeasure::Type::NONE, "cube_net"};
-static const ParamMapping paramGCSIndex = {
-    "Cube face indexing", 0, "Cube_face_indexing", 
-    common::UnitOfMeasure::Type::NONE, "cube_index"};
-
 static const ParamMapping *const paramsTPEQD[] = {&paramLatFirstPoint,
                                                   &paramLongFirstPoint,
                                                   &paramLatSecondPoint,
@@ -567,11 +557,6 @@ static const ParamMapping *const paramsGeographicTopocentric[] = {
     &paramLatTopoOrigin, &paramLonTopoOrigin, &paramHeightTopoOriginWithH0,
     nullptr};
 
-static const ParamMapping *const paramsGCS[] = {
-    &paramLatitudeNatOrigin, &paramLongitudeNatOrigin,
-    &paramFalseEasting, &paramFalseNorthing, 
-    &paramGCSFace, &paramGCSNet, &paramGCSIndex, nullptr};
-
 static const MethodMapping projectionMethodMappings[] = {
     {EPSG_NAME_METHOD_TRANSVERSE_MERCATOR, EPSG_CODE_METHOD_TRANSVERSE_MERCATOR,
      "Transverse_Mercator", "tmerc", nullptr, paramsNatOriginScaleK},
@@ -884,8 +869,6 @@ static const MethodMapping projectionMethodMappings[] = {
     {EPSG_NAME_METHOD_GEOGRAPHIC_TOPOCENTRIC,
      EPSG_CODE_METHOD_GEOGRAPHIC_TOPOCENTRIC, nullptr, nullptr, nullptr,
      paramsGeographicTopocentric},
-
-     {"Gnomonic_Cubed_Sphere", 0, "GnominicCubedSphere", "gcs", nullptr, paramsGCS},
 };
 
 const MethodMapping *getProjectionMethodMappings(size_t &nElts) {
