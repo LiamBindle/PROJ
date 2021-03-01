@@ -154,6 +154,7 @@ static PJ_XY gcs_s_forward (PJ_LP lp, PJ *P) {           /* Spheroidal, forward 
     double temp;
     enum Face i;
     PJ_LP lp_i;
+    int proj_errno;
 
     int s_end = Q->selected_face ? 1 : 6;  // if a face is selected it is first in MRU list, t.f., stop search for s>=1
 
@@ -162,7 +163,8 @@ static PJ_XY gcs_s_forward (PJ_LP lp, PJ *P) {           /* Spheroidal, forward 
         lp_i = {lp.lam - Q->face_false_origin[i].lam, lp.phi};
         xy = Q->face_proj[i]->fwd(lp_i, Q->face_proj[i]);
         // correct face if proj errno is 0, and -1 <= x <= 1, and -1 <= y <= 1
-        if (proj_errno_reset(Q->face_proj[i]) == 0 && xy.x >= -1 && xy.x <= 1 && xy.y >= -1 && xy.y <= 1) {
+        proj_errno = proj_errno_reset(Q->face_proj[i]);
+        if (proj_errno == 0 && xy.x >= -1 && xy.x <= 1 && xy.y >= -1 && xy.y <= 1) {
             // Update MRU list
             for(; s >= 1; --s) {
                 Q->mru_face[s] = Q->mru_face[s-1];
@@ -172,7 +174,7 @@ static PJ_XY gcs_s_forward (PJ_LP lp, PJ *P) {           /* Spheroidal, forward 
         }
     }
 
-    if (xy.x > 1 || xy.x < -1 || xy.y > 1 || xy.y < -1) {
+    if (proj_errno != 0 || xy.x > 1 || xy.x < -1 || xy.y > 1 || xy.y < -1) {
         proj_errno_set(P, PROJ_ERR_COORD_TRANSFM_OUTSIDE_PROJECTION_DOMAIN);
         xy = {HUGE_VAL, HUGE_VAL};
         return xy;
@@ -382,6 +384,21 @@ PJ *PROJECTION(gcs) {
         if (Q->face_proj[i] == nullptr) {
             return gcs_destructor(P, PROJ_ERR_INVALID_OP_ILLEGAL_ARG_VALUE);
         }
+    }
+
+        // Set the tiles' false origins to the center of +X          +cube_face=2 +center_origin
+    if (pj_param(P->ctx, P->params, "tcenter_origin").i) {
+        if (!pj_param(P->ctx, P->params, "tcube_face").i) {
+            proj_log_error(P, _("+center_origin is only valid if +cube_face was specified (no face to center on)"));
+            return gcs_destructor(P, PROJ_ERR_INVALID_OP_ILLEGAL_ARG_VALUE);
+        }
+        for (int i = X_P; i <= Z_N; ++i) {
+            if (i == Q->selected_face) continue;
+            Q->tile_false_origin[i].x -= Q->tile_false_origin[Q->selected_face].x;
+            Q->tile_false_origin[i].y -= Q->tile_false_origin[Q->selected_face].y;
+        }
+        Q->tile_false_origin[Q->selected_face].x = 0;
+        Q->tile_false_origin[Q->selected_face].y = 0;
     }
 
     // Initialize MRU list
