@@ -15,6 +15,14 @@ PJ_XY decode_tile_xy(char c, const char** error_msg);
 void pcns1_tile_rotations(PJ_XY* tile_pos, int* ccw_rotations, const char** error_msg);
 PJ *gcs_destructor(PJ *P, int errlev);
 
+PJ_LP rotate_pt(PJ_LP, double rz, double ry);
+
+PJ_XYZ sph2cart(PJ_LP lp);
+PJ_LP cart2sph(PJ_XYZ xyz);
+
+PJ_LP fwd_schmidt(PJ_LP lp, double sf);
+PJ_LP inv_schmidt(PJ_LP lp, double sf);
+
 namespace { // anonymous namespace
 
 // xyz->uv transformation matrix for the base net (bn); a base net is one that requires no rotations
@@ -57,6 +65,8 @@ struct pj_opaque {
     PJ* face_proj[6];                   // gnom proj object for each face
     char face_proj_def[6][256];         // gnom proj definition string of each face
     enum Face mru_face[6];              // most recently used face
+    PJ_LP target_pt;
+    double stretch_factor;
 };
 } // anonymous namespace
 
@@ -148,6 +158,62 @@ void pcns1_tile_rotations(PJ_XY* tile_pos, int* ccw_rotations, const char** erro
 
 }
 
+PJ_XYZ sph2cart(PJ_LP lp) {
+    PJ_XYZ xyz;
+    xyz.x = cos(lp.phi) * cos(lp.lam);
+    xyz.y = cos(lp.phi) * sin(lp.lam);
+    xyz.z =  sin(lp.phi);
+    return xyz;
+}
+
+PJ_LP cart2sph(PJ_XYZ xyz) {
+    PJ_LP lp;
+    lp.phi = asin(xyz.z);
+    lp.lam = atan2(xyz.y, xyz.x);
+    return lp;
+}
+
+PJ_LP rotate_pt(PJ_LP lp, double theta_z, double theta_y) {
+    double rot_mat_z[3][3] = {
+        {cos(theta_z), -sin(theta_z), 0},
+        {sin(theta_z), cos(theta_z), 0},
+        {0, 0, 1}
+    };
+    double rot_mat_y[3][3] = {
+        {cos(theta_y), 0, sin(theta_y)},
+        {0, 1, 0},
+        {-sin(theta_y), 0, cos(theta_y)}
+    };
+
+    PJ_XYZ xyz = sph2cart(lp);
+    PJ_XYZ txyz;
+    
+    // rotate about +Z
+    txyz.x = rot_mat_z[0][0]*xyz.x + rot_mat_z[0][1]*xyz.y + rot_mat_z[0][2]*xyz.z;
+    txyz.y = rot_mat_z[1][0]*xyz.x + rot_mat_z[1][1]*xyz.y + rot_mat_z[1][2]*xyz.z;
+    txyz.z = rot_mat_z[2][0]*xyz.x + rot_mat_z[2][1]*xyz.y + rot_mat_z[2][2]*xyz.z;
+
+    // rotate about +Y
+    xyz = txyz;
+    txyz.x = rot_mat_y[0][0]*xyz.x + rot_mat_y[0][1]*xyz.y + rot_mat_y[0][2]*xyz.z;
+    txyz.y = rot_mat_y[1][0]*xyz.x + rot_mat_y[1][1]*xyz.y + rot_mat_y[1][2]*xyz.z;
+    txyz.z = rot_mat_y[2][0]*xyz.x + rot_mat_y[2][1]*xyz.y + rot_mat_y[2][2]*xyz.z;
+
+    return cart2sph(txyz);
+}
+
+PJ_LP fwd_schmidt(PJ_LP lp, double s) {
+    double D = (1. - s*s) / (1. + s*s);
+    lp.phi = asin((D + sin(lp.phi)) / (1 + D * sin(lp.phi)));
+    return lp;
+}
+
+PJ_LP inv_schmidt(PJ_LP lp, double s) {
+    double D = (1. - s*s) / (1. + s*s);
+    lp.phi = -asin((sin(lp.phi) - D) / (D * sin(lp.phi) - 1.));
+    return lp;
+}
+
 static PJ_XY gcs_s_forward (PJ_LP lp, PJ *P) {           /* Spheroidal, forward */
     PJ_XY xy = {0.0,0.0};
     struct pj_opaque *Q = static_cast<struct pj_opaque*>(P->opaque);
@@ -155,6 +221,9 @@ static PJ_XY gcs_s_forward (PJ_LP lp, PJ *P) {           /* Spheroidal, forward 
     enum Face i;
     PJ_LP lp_i;
     int proj_errno;
+
+    lp = rotate_pt(lp, -Q->target_pt.lam, Q->target_pt.phi + M_HALFPI);
+    lp = inv_schmidt(lp, Q->stretch_factor);
 
     int s_end = Q->selected_face ? 1 : 6;  // if a face is selected it is first in MRU list, t.f., stop search for s>=1
 
@@ -222,6 +291,9 @@ static PJ_LP gcs_s_inverse (PJ_XY xy, PJ *P) {           /* Spheroidal, inverse 
 
     lp = Q->face_proj[i]->inv({temp_x, temp_y}, Q->face_proj[i]);
     lp.lam += Q->face_false_origin[i].lam;
+    lp = fwd_schmidt(lp, Q->stretch_factor);
+    lp = rotate_pt(lp, 0, -(Q->target_pt.phi + M_HALFPI));
+    lp = rotate_pt(lp, Q->target_pt.lam, 0);
     return lp;
 }
 
@@ -405,6 +477,10 @@ PJ *PROJECTION(gcs) {
     for (int i = X_P; i <= Z_N; ++i) {
         Q->mru_face[i] = Q->specific_face ? Q->selected_face : static_cast<enum Face>(i);
     }
+
+    Q->target_pt.lam = pj_param(P->ctx, P->params, "dtlon").f * DEG_TO_RAD;
+    Q->target_pt.phi = pj_param(P->ctx, P->params, "dtlat").f * DEG_TO_RAD;
+    Q->stretch_factor = pj_param(P->ctx, P->params, "dstretch_factor").f ;
 
     P->inv = gcs_s_inverse;
     P->fwd = gcs_s_forward;
