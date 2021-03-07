@@ -15,13 +15,15 @@ PJ_XY decode_tile_xy(char c, const char** error_msg);
 void pcns1_tile_rotations(PJ_XY* tile_pos, int* ccw_rotations, const char** error_msg);
 PJ *gcs_destructor(PJ *P, int errlev);
 
-PJ_LP rotate_pt(PJ_LP, double rz, double ry);
+static inline PJ_XYZ sph2cart(const PJ_LP& lp);
+static inline PJ_LP cart2sph(const PJ_XYZ& xyz);
+static inline void rotate_xyz(PJ_XYZ& xyz, const double rot[3][3], bool fwd);
 
-PJ_XYZ sph2cart(PJ_LP lp);
-PJ_LP cart2sph(PJ_XYZ xyz);
+inline void fwd_schmidt(PJ_LP& lp, double s);
+inline void inv_schmidt(PJ_LP& lp, double s);
 
-PJ_LP fwd_schmidt(PJ_LP lp, double sf);
-PJ_LP inv_schmidt(PJ_LP lp, double sf);
+inline void fwd_schmidt(PJ_LP& lp, double s);
+inline void inv_schmidt(PJ_LP& lp, double s);
 
 namespace { // anonymous namespace
 
@@ -65,8 +67,11 @@ struct pj_opaque {
     PJ* face_proj[6];                   // gnom proj object for each face
     char face_proj_def[6][256];         // gnom proj definition string of each face
     enum Face mru_face[6];              // most recently used face
-    PJ_LP target_pt;
+
     double stretch_factor;
+    double fwd_rot_z[3][3];
+    double fwd_rot_y[3][3];
+    bool target_pt_rot;
 };
 } // anonymous namespace
 
@@ -158,7 +163,7 @@ void pcns1_tile_rotations(PJ_XY* tile_pos, int* ccw_rotations, const char** erro
 
 }
 
-PJ_XYZ sph2cart(PJ_LP lp) {
+static inline PJ_XYZ sph2cart(const PJ_LP& lp) {
     PJ_XYZ xyz;
     xyz.x = cos(lp.phi) * cos(lp.lam);
     xyz.y = cos(lp.phi) * sin(lp.lam);
@@ -166,52 +171,39 @@ PJ_XYZ sph2cart(PJ_LP lp) {
     return xyz;
 }
 
-PJ_LP cart2sph(PJ_XYZ xyz) {
+static inline PJ_LP cart2sph(const PJ_XYZ& xyz) {
     PJ_LP lp;
     lp.phi = asin(xyz.z);
     lp.lam = atan2(xyz.y, xyz.x);
     return lp;
 }
 
-PJ_LP rotate_pt(PJ_LP lp, double theta_z, double theta_y) {
-    double rot_mat_z[3][3] = {
-        {cos(theta_z), -sin(theta_z), 0},
-        {sin(theta_z), cos(theta_z), 0},
-        {0, 0, 1}
-    };
-    double rot_mat_y[3][3] = {
-        {cos(theta_y), 0, sin(theta_y)},
-        {0, 1, 0},
-        {-sin(theta_y), 0, cos(theta_y)}
-    };
+static inline void rotate_xyz(PJ_XYZ& xyz, const double rot[3][3], bool fwd=true) {
+    PJ_XYZ temp_xyz;
 
-    PJ_XYZ xyz = sph2cart(lp);
-    PJ_XYZ txyz;
-    
-    // rotate about +Z
-    txyz.x = rot_mat_z[0][0]*xyz.x + rot_mat_z[0][1]*xyz.y + rot_mat_z[0][2]*xyz.z;
-    txyz.y = rot_mat_z[1][0]*xyz.x + rot_mat_z[1][1]*xyz.y + rot_mat_z[1][2]*xyz.z;
-    txyz.z = rot_mat_z[2][0]*xyz.x + rot_mat_z[2][1]*xyz.y + rot_mat_z[2][2]*xyz.z;
+    if(fwd) {
+        temp_xyz.x = rot[0][0]*xyz.x + rot[0][1]*xyz.y + rot[0][2]*xyz.z;
+        temp_xyz.y = rot[1][0]*xyz.x + rot[1][1]*xyz.y + rot[1][2]*xyz.z;
+        temp_xyz.z = rot[2][0]*xyz.x + rot[2][1]*xyz.y + rot[2][2]*xyz.z;
+    } else {
+        temp_xyz.x = rot[0][0]*xyz.x + rot[1][0]*xyz.y + rot[2][0]*xyz.z;
+        temp_xyz.y = rot[0][1]*xyz.x + rot[1][1]*xyz.y + rot[2][1]*xyz.z;
+        temp_xyz.z = rot[0][2]*xyz.x + rot[1][2]*xyz.y + rot[2][2]*xyz.z;
+    }
 
-    // rotate about +Y
-    xyz = txyz;
-    txyz.x = rot_mat_y[0][0]*xyz.x + rot_mat_y[0][1]*xyz.y + rot_mat_y[0][2]*xyz.z;
-    txyz.y = rot_mat_y[1][0]*xyz.x + rot_mat_y[1][1]*xyz.y + rot_mat_y[1][2]*xyz.z;
-    txyz.z = rot_mat_y[2][0]*xyz.x + rot_mat_y[2][1]*xyz.y + rot_mat_y[2][2]*xyz.z;
-
-    return cart2sph(txyz);
+    xyz.x = temp_xyz.x;
+    xyz.y = temp_xyz.y;
+    xyz.z = temp_xyz.z;
 }
 
-PJ_LP fwd_schmidt(PJ_LP lp, double s) {
+inline void fwd_schmidt(PJ_LP& lp, double s) {
     double D = (1. - s*s) / (1. + s*s);
     lp.phi = asin((D + sin(lp.phi)) / (1 + D * sin(lp.phi)));
-    return lp;
 }
 
-PJ_LP inv_schmidt(PJ_LP lp, double s) {
+inline void inv_schmidt(PJ_LP& lp, double s) {
     double D = (1. - s*s) / (1. + s*s);
     lp.phi = -asin((sin(lp.phi) - D) / (D * sin(lp.phi) - 1.));
-    return lp;
 }
 
 static PJ_XY gcs_s_forward (PJ_LP lp, PJ *P) {           /* Spheroidal, forward */
@@ -222,8 +214,16 @@ static PJ_XY gcs_s_forward (PJ_LP lp, PJ *P) {           /* Spheroidal, forward 
     PJ_LP lp_i;
     int proj_errno;
 
-    lp = rotate_pt(lp, -Q->target_pt.lam, Q->target_pt.phi + M_HALFPI);
-    lp = inv_schmidt(lp, Q->stretch_factor);
+    if (Q->target_pt_rot) {
+        PJ_XYZ xyz = sph2cart(lp);
+        rotate_xyz(xyz, Q->fwd_rot_z);
+        rotate_xyz(xyz, Q->fwd_rot_y);
+        lp = cart2sph(xyz);
+    }
+
+    if (Q->stretch_factor > 1.0) {
+        inv_schmidt(lp, Q->stretch_factor);
+    }
 
     int s_end = Q->selected_face ? 1 : 6;  // if a face is selected it is first in MRU list, t.f., stop search for s>=1
 
@@ -291,9 +291,17 @@ static PJ_LP gcs_s_inverse (PJ_XY xy, PJ *P) {           /* Spheroidal, inverse 
 
     lp = Q->face_proj[i]->inv({temp_x, temp_y}, Q->face_proj[i]);
     lp.lam += Q->face_false_origin[i].lam;
-    lp = fwd_schmidt(lp, Q->stretch_factor);
-    lp = rotate_pt(lp, 0, -(Q->target_pt.phi + M_HALFPI));
-    lp = rotate_pt(lp, Q->target_pt.lam, 0);
+
+    if (Q->stretch_factor > 1.0) {
+        fwd_schmidt(lp, Q->stretch_factor);
+    }
+
+    if (Q->target_pt_rot) {
+        PJ_XYZ xyz = sph2cart(lp);
+        rotate_xyz(xyz, Q->fwd_rot_y, false);
+        rotate_xyz(xyz, Q->fwd_rot_z, false);
+        lp = cart2sph(xyz);
+    }
     return lp;
 }
 
@@ -478,9 +486,47 @@ PJ *PROJECTION(gcs) {
         Q->mru_face[i] = Q->specific_face ? Q->selected_face : static_cast<enum Face>(i);
     }
 
-    Q->target_pt.lam = pj_param(P->ctx, P->params, "dtlon").f * DEG_TO_RAD;
-    Q->target_pt.phi = pj_param(P->ctx, P->params, "dtlat").f * DEG_TO_RAD;
-    Q->stretch_factor = pj_param(P->ctx, P->params, "dstretch_factor").f ;
+    Q->target_pt_rot = false;
+    if (pj_param(P->ctx, P->params, "ttlon").i) {
+        double theta_z = -pj_param(P->ctx, P->params, "dtlon").f * DEG_TO_RAD; // rot about +Z = -tlon
+        Q->fwd_rot_z[0][0] = cos(theta_z);
+        Q->fwd_rot_z[0][1] = -sin(theta_z);
+        Q->fwd_rot_z[0][2] = 0;
+        Q->fwd_rot_z[1][0] = sin(theta_z);
+        Q->fwd_rot_z[1][1] = cos(theta_z);
+        Q->fwd_rot_z[1][2] = 0;
+        Q->fwd_rot_z[2][0] = 0;
+        Q->fwd_rot_z[2][1] = 0;
+        Q->fwd_rot_z[2][2] = 1;
+        Q->target_pt_rot = true;
+    } else {
+        for(int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j)
+                Q->fwd_rot_z[i][j] = i == j ? 1 : 0;
+    }
+    if (pj_param(P->ctx, P->params, "ttlat").i) {
+        double theta_y = M_HALFPI + pj_param(P->ctx, P->params, "dtlat").f * DEG_TO_RAD; // rot about +Z = tlat + pi/2
+        Q->fwd_rot_y[0][0] = cos(theta_y);
+        Q->fwd_rot_y[0][1] = 0;
+        Q->fwd_rot_y[0][2] = sin(theta_y);
+        Q->fwd_rot_y[1][0] = 0;
+        Q->fwd_rot_y[1][1] = 1;
+        Q->fwd_rot_y[1][2] = 0;
+        Q->fwd_rot_y[2][0] = -sin(theta_y);
+        Q->fwd_rot_y[2][1] = 0;
+        Q->fwd_rot_y[2][2] = cos(theta_y);  
+        Q->target_pt_rot = true;
+    } else {
+        for(int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j)
+                Q->fwd_rot_y[i][j] = i == j ? 1 : 0;
+    }
+
+    if (pj_param(P->ctx, P->params, "tstretch_factor").i) {
+        Q->stretch_factor = pj_param(P->ctx, P->params, "dstretch_factor").f ;
+    } else {
+        Q->stretch_factor = 1.0;
+    }
 
     P->inv = gcs_s_inverse;
     P->fwd = gcs_s_forward;
