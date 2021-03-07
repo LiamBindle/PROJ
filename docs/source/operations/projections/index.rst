@@ -52,6 +52,7 @@ Projections map the spherical 3D space to a flat 2D space.
    fouc
    fouc_s
    gall
+   gcs
    geos
    gins8
    gn_sinu
